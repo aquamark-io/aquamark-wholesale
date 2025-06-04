@@ -8,6 +8,7 @@ const { PDFDocument, rgb, degrees } = require("pdf-lib");
 const fetch = require("node-fetch");
 const { createClient } = require("@supabase/supabase-js");
 const QRCode = require("qrcode");
+const sharp = require("sharp"); // ✅ NEW: for PNG to JPG conversion
 
 const app = express();
 const port = process.env.PORT;
@@ -68,19 +69,20 @@ app.post("/watermark", async (req, res) => {
 
   const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
 
-  // 🖼️ Fetch logo using exact filename = userEmail
+  // 🖼️ Fetch PNG logo and convert to JPG
   const logoFilename = `${userEmail}.png`;
   const { data: logoUrlData } = supabase.storage.from("wholesale.logos").getPublicUrl(logoFilename);
   const logoRes = await fetch(logoUrlData.publicUrl);
   if (!logoRes.ok) {
     return res.status(404).send("Logo fetch from CDN failed");
   }
+  const pngBuffer = Buffer.from(await logoRes.arrayBuffer());
 
-  const logoBytes = await logoRes.arrayBuffer();
+  // ✅ Convert PNG to JPG to reduce size
+  const jpgBuffer = await sharp(pngBuffer).jpeg({ quality: 80 }).toBuffer();
+  const watermarkImage = await pdfDoc.embedJpg(jpgBuffer);
 
-  // 🖼️ Embed watermark logo
-  const watermarkImage = await pdfDoc.embedPng(logoBytes);
-
+  // 🛡️ QR Code
   const today = new Date().toISOString().split("T")[0];
   const payload = encodeURIComponent(`ProtectedByAquamark|${userEmail}|${lender}|${salesperson}|${processor}|${today}`);
   const qrText = `https://aquamark.io/q.html?data=${payload}`;
@@ -88,7 +90,7 @@ app.post("/watermark", async (req, res) => {
   const qrImageBytes = Buffer.from(qrDataUrl.split(",")[1], "base64");
   const qrImage = await pdfDoc.embedPng(qrImageBytes);
 
-  // 🖊️ Draw on each page
+  // 🖊️ Apply watermark and QR to all pages
   const pages = pdfDoc.getPages();
   for (const page of pages) {
     const { width, height } = page.getSize();
