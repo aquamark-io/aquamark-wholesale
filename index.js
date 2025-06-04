@@ -35,15 +35,6 @@ if (!user_id || !user_email) {
   return res.status(400).send("Missing user_id or user_email.");
 }
 
-// Validate partner
-const { data: partner, error: partnerErr } = await supabase
-  .from("partners")
-  .select("id")
-  .eq("id", process.env.PARTNER_ID)
-  .single();
-if (partnerErr || !partner) {
-  return res.status(403).send("Invalid partner configuration.");
-}
 
 // Validate user
 const { data: user, error: userErr } = await supabase
