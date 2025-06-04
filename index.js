@@ -67,16 +67,13 @@ app.post("/watermark", async (req, res) => {
 
   const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
 
-  // 🖼️ Fetch PNG logo
+  // 🖼️ Fetch logo
   const logoFilename = `${userEmail}.png`;
   const { data: logoUrlData } = supabase.storage.from("wholesale.logos").getPublicUrl(logoFilename);
   const logoRes = await fetch(logoUrlData.publicUrl);
-  if (!logoRes.ok) {
-    return res.status(404).send("Logo fetch from CDN failed");
-  }
+  if (!logoRes.ok) return res.status(404).send("Logo fetch failed");
 
   const logoBytes = await logoRes.arrayBuffer();
-  const logoImage = await pdfDoc.embedPng(logoBytes);
 
   // 🔐 Generate QR code
   const today = new Date().toISOString().split("T")[0];
@@ -84,39 +81,50 @@ app.post("/watermark", async (req, res) => {
   const qrText = `https://aquamark.io/q.html?data=${payload}`;
   const qrDataUrl = await QRCode.toDataURL(qrText, { margin: 0, scale: 5 });
   const qrImageBytes = Buffer.from(qrDataUrl.split(",")[1], "base64");
-  const qrImage = await pdfDoc.embedPng(qrImageBytes);
 
-  // 🖊️ Apply watermark + QR to each page
-  const pages = pdfDoc.getPages();
-  for (const page of pages) {
-    const { width, height } = page.getSize();
-    const logoWidth = width * 0.2;
-    const logoHeight = (logoWidth / logoImage.width) * logoImage.height;
+  // ➕ Create watermark overlay page
+  const watermarkDoc = await PDFDocument.create();
+  const watermarkImage = await watermarkDoc.embedPng(logoBytes);
+  const qrImage = await watermarkDoc.embedPng(qrImageBytes);
 
-    for (let x = 0; x < width; x += (logoWidth + 150)) {
-      for (let y = 0; y < height; y += (logoHeight + 150)) {
-        page.drawImage(logoImage, {
-          x,
-          y,
-          width: logoWidth,
-          height: logoHeight,
-          opacity: 0.15,
-          rotate: degrees(45),
-        });
-      }
+  const { width, height } = pdfDoc.getPages()[0].getSize();
+  const watermarkPage = watermarkDoc.addPage([width, height]);
+
+  const logoWidth = width * 0.2;
+  const logoHeight = (logoWidth / watermarkImage.width) * watermarkImage.height;
+
+  for (let x = 0; x < width; x += (logoWidth + 150)) {
+    for (let y = 0; y < height; y += (logoHeight + 150)) {
+      watermarkPage.drawImage(watermarkImage, {
+        x,
+        y,
+        width: logoWidth,
+        height: logoHeight,
+        opacity: 0.15,
+        rotate: degrees(45),
+      });
     }
-
-    page.drawImage(qrImage, {
-      x: width - 35,
-      y: 15,
-      width: 20,
-      height: 20,
-      opacity: 0.4,
-    });
   }
 
-  // 📈 Track usage
-  const numPages = pages.length;
+  watermarkPage.drawImage(qrImage, {
+    x: width - 35,
+    y: 15,
+    width: 20,
+    height: 20,
+    opacity: 0.4,
+  });
+
+  const watermarkPdfBytes = await watermarkDoc.save();
+  const watermarkEmbedDoc = await PDFDocument.load(watermarkPdfBytes);
+  const [embeddedPage] = await pdfDoc.embedPages([watermarkEmbedDoc.getPages()[0]]);
+
+  // 🧷 Overlay watermark on each page
+  pdfDoc.getPages().forEach((page) => {
+    page.drawPage(embeddedPage, { x: 0, y: 0, width, height });
+  });
+
+  // 📈 Update usage
+  const numPages = pdfDoc.getPageCount();
   const updatedPagesUsed = usage + numPages;
 
   await supabase
@@ -126,10 +134,10 @@ app.post("/watermark", async (req, res) => {
 
   const finalPdf = await pdfDoc.save();
   res.setHeader("Content-Type", "application/pdf");
-res.setHeader(
-  "Content-Disposition",
-  `attachment; filename="${file.name.replace(".pdf", "")} - protected.pdf"`
-);
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="${file.name.replace(".pdf", "")} - protected.pdf"`
+  );
   res.send(Buffer.from(finalPdf));
 });
 
