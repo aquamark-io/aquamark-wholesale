@@ -48,7 +48,7 @@ app.post("/watermark", async (req, res) => {
   const plan = (userRecord.plan || "").toLowerCase();
   const usage = userRecord.pages_used || 0;
 
-  // 🧠 Decrypt if needed (clean retail-style)
+  // 🧠 Decrypt if needed
   let pdfBytes = file.data;
   try {
     await PDFDocument.load(pdfBytes, { ignoreEncryption: false });
@@ -66,11 +66,9 @@ app.post("/watermark", async (req, res) => {
     if (fs.existsSync("decrypted.pdf")) fs.unlinkSync("decrypted.pdf");
   }
 
-  // 📄 Load decrypted (or original) PDF
   const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
-  const pageSize = pdfDoc.getPage(0).getSize();
 
-  // 🖼️ Optimized logo fetch from flat root
+  // 🖼️ Optimized logo fetch
   const { data: logoList } = await supabase.storage.from("wholesale.logos").list("", { limit: 1000 });
   if (!logoList || logoList.length === 0) {
     return res.status(404).send("No logos found");
@@ -85,61 +83,55 @@ app.post("/watermark", async (req, res) => {
     (b.name.match(/-(\d+)/)?.[1] ?? 0) - (a.name.match(/-(\d+)/)?.[1] ?? 0)
   )[0];
 
- const { data: logoUrlData } = supabase.storage.from("wholesale.logos").getPublicUrl(latestLogo.name);
-const logoRes = await fetch(logoUrlData.publicUrl);
-if (!logoRes.ok) {
-  return res.status(404).send("Logo fetch from CDN failed");
-}
-const logoBytes = await logoRes.arrayBuffer();
-
-
-  // 🖼️ Create watermark overlay
-  const watermarkDoc = await PDFDocument.create();
-  const watermarkImage = await watermarkDoc.embedPng(logoBytes);
-  const watermarkPage = watermarkDoc.addPage([pageSize.width, pageSize.height]);
-
-  const logoWidth = pageSize.width * 0.2;
-  const logoHeight = (logoWidth / watermarkImage.width) * watermarkImage.height;
-
-  for (let x = 0; x < pageSize.width; x += (logoWidth + 150)) {
-    for (let y = 0; y < pageSize.height; y += (logoHeight + 150)) {
-      watermarkPage.drawImage(watermarkImage, {
-        x,
-        y,
-        width: logoWidth,
-        height: logoHeight,
-        opacity: 0.15,
-        rotate: degrees(45),
-      });
-    }
+  const { data: logoUrlData } = supabase.storage.from("wholesale.logos").getPublicUrl(latestLogo.name);
+  const logoRes = await fetch(logoUrlData.publicUrl);
+  if (!logoRes.ok) {
+    return res.status(404).send("Logo fetch from CDN failed");
   }
 
-  // 🔐 QR Code
+  const logoBytes = await logoRes.arrayBuffer();
+
+  // 🖼️ Embed watermark logo
+  const watermarkImage = await pdfDoc.embedPng(logoBytes);
+
   const today = new Date().toISOString().split("T")[0];
   const payload = encodeURIComponent(`ProtectedByAquamark|${userEmail}|${lender}|${salesperson}|${processor}|${today}`);
   const qrText = `https://aquamark.io/q.html?data=${payload}`;
   const qrDataUrl = await QRCode.toDataURL(qrText, { margin: 0, scale: 5 });
   const qrImageBytes = Buffer.from(qrDataUrl.split(",")[1], "base64");
-  const qrImage = await watermarkDoc.embedPng(qrImageBytes);
+  const qrImage = await pdfDoc.embedPng(qrImageBytes);
 
-  watermarkPage.drawImage(qrImage, {
-    x: pageSize.width - 35,
-    y: 15,
-    width: 20,
-    height: 20,
-    opacity: 0.4,
-  });
+  // 🖊️ Draw on each page
+  const pages = pdfDoc.getPages();
+  for (const page of pages) {
+    const { width, height } = page.getSize();
+    const logoWidth = width * 0.2;
+    const logoHeight = (logoWidth / watermarkImage.width) * watermarkImage.height;
 
-  const watermarkPdfBytes = await watermarkDoc.save();
-  const watermarkEmbed = await PDFDocument.load(watermarkPdfBytes);
-  const [overlayPage] = await pdfDoc.embedPages([watermarkEmbed.getPages()[0]]);
+    for (let x = 0; x < width; x += (logoWidth + 150)) {
+      for (let y = 0; y < height; y += (logoHeight + 150)) {
+        page.drawImage(watermarkImage, {
+          x,
+          y,
+          width: logoWidth,
+          height: logoHeight,
+          opacity: 0.15,
+          rotate: degrees(45),
+        });
+      }
+    }
 
-  pdfDoc.getPages().forEach((page) => {
-    page.drawPage(overlayPage, { x: 0, y: 0, width: pageSize.width, height: pageSize.height });
-  });
+    page.drawImage(qrImage, {
+      x: width - 35,
+      y: 15,
+      width: 20,
+      height: 20,
+      opacity: 0.4,
+    });
+  }
 
-  // 📈 Usage tracking
-  const numPages = pdfDoc.getPageCount();
+  // 📈 Update usage
+  const numPages = pages.length;
   const updatedPagesUsed = usage + numPages;
 
   await supabase
