@@ -80,18 +80,37 @@ const file = Array.isArray(req.files.file) ? req.files.file[0] : req.files.file;
 
     const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
 
-    // 📊 Check usage
-    const { data: usage, error: usageErr } = await supabase
-      .from("usage")
-      .select("*")
-      .eq("user_email", userEmail)
-      .single();
-    if (usageErr || !usage) throw new Error("Usage record not found");
+    // 📊 Usage
+   const numPages = pdfDoc.getPageCount();
 
-    const numPages = pdfDoc.getPageCount();
-    if (usage.page_credits - usage.pages_used < numPages) {
-      return res.status(402).send("Not enough page credits.");
-    }
+// 🔁 Fetch user's current usage and plan
+const { data: userUsage, error: usageErr } = await supabase
+  .from(process.env.PARTNER_TABLE)
+  .select("pages_used, plan")
+  .eq("id", user_id)
+  .single();
+
+if (usageErr || !userUsage) throw new Error("Usage record not found");
+
+const updatedPagesUsed = userUsage.pages_used + numPages;
+const plan = (userUsage.plan || "").toLowerCase();
+let limit = Infinity;
+
+if (plan === "core") limit = 25000;
+else if (plan === "pro") limit = 50000;
+
+// ❗ Log only, do not block access
+if (updatedPagesUsed > limit) {
+  console.warn(`⚠️ User ${user_id} exceeded usage limit for plan "${plan}"`);
+  // Optional: email, webhook, or flag if you want
+}
+
+// 📈 Update pages_used in Supabase
+await supabase
+  .from(process.env.PARTNER_TABLE)
+  .update({ pages_used: updatedPagesUsed })
+  .eq("id", user_id);
+
 
 // 🖼️ Get logo from wholesale bucket (flat: user_email.png or .jpg)
 const possibleExtensions = [".png", ".jpg", ".jpeg"];
