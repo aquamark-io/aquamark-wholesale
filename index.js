@@ -48,13 +48,30 @@ app.post("/watermark", async (req, res) => {
   const plan = (userRecord.plan || "").toLowerCase();
   const usage = userRecord.pages_used || 0;
 
-  // 🧠 Decrypt if needed
-  fs.writeFileSync("input.pdf", file.data);
-  exec(`qpdf --decrypt input.pdf decrypted.pdf`, async (err) => {
-    const inputPath = err ? "input.pdf" : "decrypted.pdf";
-    const fileData = fs.readFileSync(inputPath);
-    const pdfDoc = await PDFDocument.load(fileData, { ignoreEncryption: true });
-    const pageSize = pdfDoc.getPage(0).getSize();
+// 🧠 Decrypt if needed — cleaner, retail-style
+let pdfBytes = file.data;
+try {
+  await PDFDocument.load(pdfBytes, { ignoreEncryption: false });
+} catch {
+  // If encrypted, use qpdf to decrypt to a temp file
+  fs.writeFileSync("input.pdf", pdfBytes);
+  await new Promise((resolve, reject) => {
+    exec(`qpdf --decrypt input.pdf decrypted.pdf`, (err) => {
+      if (err) {
+        resolve(); // Use original if decryption fails
+      } else {
+        pdfBytes = fs.readFileSync("decrypted.pdf");
+        resolve();
+      }
+    });
+  });
+  fs.unlinkSync("input.pdf");
+  if (fs.existsSync("decrypted.pdf")) fs.unlinkSync("decrypted.pdf");
+}
+
+const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+const pageSize = pdfDoc.getPage(0).getSize();
+
 
 // 🖼️ Optimized logo fetch from flat root
 const { data: logoList } = await supabase.storage.from("wholesale.logos").list("", { limit: 1000 });
