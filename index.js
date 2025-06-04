@@ -17,7 +17,7 @@ const supabase = createClient(
 
 app.use(express.json());
 
-app.post("/watermark", upload.array("pdfs"), async (req, res) => {
+app.post("/watermark", upload.array("file"), async (req, res) => {
   try {
     const { apiKey, userEmail, salesperson, processor, lender } = req.body;
 
