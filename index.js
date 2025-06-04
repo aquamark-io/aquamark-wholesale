@@ -45,6 +45,8 @@ console.log("Incoming user_email:", userEmail);
     .select("*")
     .eq("user_email", userEmail)
     .single();
+  console.log("🔍 Supabase error:", userErr);
+console.log("📄 Supabase record:", userRecord);
 
   if (userErr || !userRecord) {
     return res.status(401).send("Invalid user");
