@@ -46,10 +46,9 @@ const { data: user, error: userErr } = await supabase
 if (userErr || !user) {
   return res.status(403).send("Invalid user_id or user_email.");
 }
-  if (!req.files || !req.files.file || !req.body.user_email) {
-    return res.status(400).send("Missing file or user_email");
-  }
-
+  if (!req.files || !req.files.file) {
+  return res.status(400).send("Missing file");
+}
   const userEmail = req.body.user_email;
   const lender = req.body.lender || "N/A";
   const salesperson = req.body.salesperson || "N/A";
@@ -180,18 +179,6 @@ const [embeddedPage] = await pdfDoc.embedPages([watermarkEmbed.getPages()[0]]);
     pdfDoc.getPages().forEach((page) => {
   page.drawPage(embeddedPage, { x: 0, y: 0, width, height });
 });
-
-    // 📈 Track usage
-    const newPagesUsed = usage.pages_used + numPages;
-    const newPagesRemaining = usage.page_credits - newPagesUsed;
-    await supabase
-      .from("usage")
-      .update({
-        pages_used: newPagesUsed,
-        pages_remaining: newPagesRemaining,
-      })
-      .eq("user_email", userEmail)
-      .select();
 
     const finalPdf = await pdfDoc.save();
 
