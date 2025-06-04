@@ -56,22 +56,22 @@ app.post("/watermark", async (req, res) => {
     const pdfDoc = await PDFDocument.load(fileData, { ignoreEncryption: true });
     const pageSize = pdfDoc.getPage(0).getSize();
 
-    // 🖼️ Try .png, .jpg, and .jpeg for logo format
-    const possibleExtensions = [".png", ".jpg", ".jpeg"];
-    let logoBytes = null;
+// 🖼️ Get most recent logo from wholesale bucket
+const { data: logoList } = await supabase.storage.from("wholesale.logos").list(userEmail);
+if (!logoList || logoList.length === 0) {
+  return res.status(404).send("Logo not found for this user");
+}
 
-    for (const ext of possibleExtensions) {
-      const filePath = `${userEmail}${ext}`;
-      const { data: head } = await supabase.storage.from("wholesale.logos").download(filePath);
-      if (head) {
-        logoBytes = await head.arrayBuffer();
-        break;
-      }
-    }
+const latestLogo = logoList.sort((a, b) =>
+  parseInt(b.name.split("-")[1]) - parseInt(a.name.split("-")[1])
+)[0];
+const logoPath = `${userEmail}/${latestLogo.name}`;
+const { data: logoFile } = await supabase.storage.from("wholesale.logos").download(logoPath);
+if (!logoFile) {
+  return res.status(404).send("Logo download failed");
+}
+const logoBytes = await logoFile.arrayBuffer();
 
-    if (!logoBytes) {
-      return res.status(404).send("Logo not found for this user");
-    }
 
     // 🖼️ Create watermark overlay
     const watermarkDoc = await PDFDocument.create();
