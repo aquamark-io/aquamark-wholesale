@@ -85,11 +85,13 @@ app.post("/watermark", async (req, res) => {
     (b.name.match(/-(\d+)/)?.[1] ?? 0) - (a.name.match(/-(\d+)/)?.[1] ?? 0)
   )[0];
 
-  const { data: logoFile } = await supabase.storage.from("wholesale.logos").download(latestLogo.name);
-  if (!logoFile) {
-    return res.status(404).send("Logo download failed");
-  }
-  const logoBytes = await logoFile.arrayBuffer();
+ const { data: logoUrlData } = supabase.storage.from("wholesale.logos").getPublicUrl(latestLogo.name);
+const logoRes = await fetch(logoUrlData.publicUrl);
+if (!logoRes.ok) {
+  return res.status(404).send("Logo fetch from CDN failed");
+}
+const logoBytes = await logoRes.arrayBuffer();
+
 
   // 🖼️ Create watermark overlay
   const watermarkDoc = await PDFDocument.create();
