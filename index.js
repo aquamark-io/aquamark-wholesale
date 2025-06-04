@@ -26,10 +26,35 @@ app.post("/watermark", async (req, res) => {
   }
 
   const token = authHeader.split(" ")[1];
-  if (token !== process.env.AQUAMARK_API_KEY) {
-    return res.status(401).send("Invalid API key.");
-  }
+if (token !== process.env.AQUAMARK_API_KEY) {
+  return res.status(401).send("Invalid API key.");
+}
 
+const { user_id, user_email } = req.body;
+if (!user_id || !user_email) {
+  return res.status(400).send("Missing user_id or user_email.");
+}
+
+// Validate partner
+const { data: partner, error: partnerErr } = await supabase
+  .from("partners")
+  .select("id")
+  .eq("id", process.env.PARTNER_ID)
+  .single();
+if (partnerErr || !partner) {
+  return res.status(403).send("Invalid partner configuration.");
+}
+
+// Validate user
+const { data: user, error: userErr } = await supabase
+  .from(process.env.PARTNER_TABLE)
+  .select("id, email")
+  .eq("id", user_id)
+  .eq("email", user_email)
+  .single();
+if (userErr || !user) {
+  return res.status(403).send("Invalid user_id or user_email.");
+}
   if (!req.files || !req.files.file || !req.body.user_email) {
     return res.status(400).send("Missing file or user_email");
   }
