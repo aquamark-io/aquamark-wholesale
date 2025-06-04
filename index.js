@@ -24,6 +24,11 @@ app.post("/watermark", async (req, res) => {
   const processor = req.body.processor || "unknown";
   const lender = req.body.lender || "unknown";
 
+  console.log("🔥 /watermark endpoint hit");
+console.log("Incoming API key:", apiKey);
+console.log("Expected API key:", process.env.AQUAMARK_API_KEY);
+console.log("Incoming user_email:", userEmail);
+
   if (apiKey !== process.env.AQUAMARK_API_KEY) {
     return res.status(403).send("Unauthorized");
   }
