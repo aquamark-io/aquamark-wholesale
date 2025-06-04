@@ -56,22 +56,22 @@ app.post("/watermark", async (req, res) => {
     const pdfDoc = await PDFDocument.load(fileData, { ignoreEncryption: true });
     const pageSize = pdfDoc.getPage(0).getSize();
 
-    // 🔍 Get latest logo from wholesale bucket
-    const { data: logos } = await supabase.storage.from("wholesale.logos").list(userEmail);
-    if (!logos || logos.length === 0) {
-      return res.status(404).send("No logo found");
+    // 🖼️ Try .png, .jpg, and .jpeg for logo format
+    const possibleExtensions = [".png", ".jpg", ".jpeg"];
+    let logoBytes = null;
+
+    for (const ext of possibleExtensions) {
+      const filePath = `${userEmail}${ext}`;
+      const { data: head } = await supabase.storage.from("wholesale.logos").download(filePath);
+      if (head) {
+        logoBytes = await head.arrayBuffer();
+        break;
+      }
     }
 
-    const latestLogo = logos.sort((a, b) => {
-      const tA = parseInt(a.name.split("-")[1]);
-      const tB = parseInt(b.name.split("-")[1]);
-      return tB - tA;
-    })[0];
-
-    const logoPath = `${userEmail}/${latestLogo.name}`;
-    const { data: logoUrlData } = supabase.storage.from("wholesale.logos").getPublicUrl(logoPath);
-    const logoRes = await fetch(logoUrlData.publicUrl);
-    const logoBytes = await logoRes.arrayBuffer();
+    if (!logoBytes) {
+      return res.status(404).send("Logo not found for this user");
+    }
 
     // 🖼️ Create watermark overlay
     const watermarkDoc = await PDFDocument.create();
