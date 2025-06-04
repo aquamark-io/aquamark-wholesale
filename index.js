@@ -1,14 +1,14 @@
-import express from "express";
-import fileUpload from "express-fileupload";
-import cors from "cors";
-import dotenv from "dotenv";
-import { createClient } from "@supabase/supabase-js";
-import fs from "fs";
-import { exec } from "child_process";
-import { PDFDocument, rgb } from "pdf-lib";
-import QRCode from "qrcode";
-
-dotenv.config();
+const express = require("express");
+const fileUpload = require("express-fileupload");
+const cors = require("cors");
+const { exec } = require("child_process");
+const fs = require("fs");
+const path = require("path");
+const { PDFDocument, rgb, degrees } = require("pdf-lib");
+const fetch = require("node-fetch");
+const { createClient } = require("@supabase/supabase-js");
+const QRCode = require("qrcode");
+require("dotenv").config();
 
 const app = express();
 const port = process.env.PORT || 3000;
