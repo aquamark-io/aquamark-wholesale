@@ -68,22 +68,9 @@ app.post("/watermark", async (req, res) => {
 
   const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
 
-  // 🖼️ Optimized logo fetch
-  const { data: logoList } = await supabase.storage.from("wholesale.logos").list("", { limit: 1000 });
-  if (!logoList || logoList.length === 0) {
-    return res.status(404).send("No logos found");
-  }
-
-  const matchingLogos = logoList.filter((file) => file.name.startsWith(userEmail));
-  if (matchingLogos.length === 0) {
-    return res.status(404).send("No logo found for this user");
-  }
-
-  const latestLogo = matchingLogos.sort((a, b) =>
-    (b.name.match(/-(\d+)/)?.[1] ?? 0) - (a.name.match(/-(\d+)/)?.[1] ?? 0)
-  )[0];
-
-  const { data: logoUrlData } = supabase.storage.from("wholesale.logos").getPublicUrl(latestLogo.name);
+  // 🖼️ Fetch logo using exact filename = userEmail
+  const logoFilename = `${userEmail}.png`;
+  const { data: logoUrlData } = supabase.storage.from("wholesale.logos").getPublicUrl(logoFilename);
   const logoRes = await fetch(logoUrlData.publicUrl);
   if (!logoRes.ok) {
     return res.status(404).send("Logo fetch from CDN failed");
