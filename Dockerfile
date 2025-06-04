@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y \
   librsvg2-dev
 
 # Create app directory
-WORKDIR /usr/src/app
+WORKDIR /usr/src
 
 # Copy package files and install dependencies
 COPY package*.json ./
