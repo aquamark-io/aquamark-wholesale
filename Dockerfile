@@ -1,24 +1,17 @@
 FROM node:18-slim
 
-# Install qpdf and dependencies for canvas
-RUN apt-get update && apt-get install -y \
-  qpdf \
-  libcairo2-dev \
-  libpango1.0-dev \
-  libjpeg-dev \
-  libgif-dev \
-  librsvg2-dev
+# Install qpdf
+RUN apt-get update && apt-get install -y qpdf
 
-# Create app directory
+# Set working directory
 WORKDIR /usr/src
 
-# Copy package files and install dependencies
+# Copy and install
 COPY package*.json ./
 RUN npm install
 
-# Copy the rest of the code
 COPY . .
 
-# Expose port and start the app
+# Expose and start
 EXPOSE 10000
 CMD ["node", "index.js"]
