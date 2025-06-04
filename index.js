@@ -1,225 +1,153 @@
-const express = require("express");
-const fileUpload = require("express-fileupload");
-const cors = require("cors");
-const { exec } = require("child_process");
-const fs = require("fs");
-const path = require("path");
-const { PDFDocument, rgb, degrees } = require("pdf-lib");
-const fetch = require("node-fetch");
-const { createClient } = require("@supabase/supabase-js");
-const QRCode = require("qrcode"); // ✅ Added for QR code generation
+import express from "express";
+import fileUpload from "express-fileupload";
+import cors from "cors";
+import dotenv from "dotenv";
+import { createClient } from "@supabase/supabase-js";
+import fs from "fs";
+import { exec } from "child_process";
+import { PDFDocument, rgb } from "pdf-lib";
+import QRCode from "qrcode";
+
+dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 10000;
+const port = process.env.PORT || 3000;
 
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_KEY;
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
 app.use(cors());
 app.use(fileUpload());
 
 app.post("/watermark", async (req, res) => {
-  const authHeader = req.headers["authorization"];
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return res.status(401).send("Missing or invalid authorization token.");
+  const apiKey = req.headers.authorization?.split(" ")[1];
+  const userEmail = req.body.user_email;
+  const salesperson = req.body.salesperson || "unknown";
+  const processor = req.body.processor || "unknown";
+  const lender = req.body.lender || "unknown";
+
+  if (apiKey !== process.env.AQUAMARK_API_KEY) {
+    return res.status(403).send("Unauthorized");
   }
 
-  const token = authHeader.split(" ")[1];
-if (token !== process.env.AQUAMARK_API_KEY) {
-  return res.status(401).send("Invalid API key.");
-}
+  if (!req.files || !req.files.file || !userEmail) {
+    return res.status(400).send("Missing file or user_email");
+  }
 
-const { user_id, user_email } = req.body;
-if (!user_id || !user_email) {
-  return res.status(400).send("Missing user_id or user_email.");
-}
+  const file = req.files.file;
 
+  // 🔍 Fetch user from the correct partner table
+  const { data: userRecord, error: userErr } = await supabase
+    .from(process.env.PARTNER_TABLE)
+    .select("*")
+    .eq("user_email", userEmail)
+    .single();
 
-// Validate user
-const { data: user, error: userErr } = await supabase
-  .from(process.env.PARTNER_TABLE)
-  .select("id, email")
-  .eq("id", user_id)
-  .eq("email", user_email)
-  .single();
-if (userErr || !user) {
-  return res.status(403).send("Invalid user_id or user_email.");
-}
-  if (!req.files || !req.files.file) {
-  return res.status(400).send("Missing file");
-}
-  const userEmail = req.body.user_email;
-  const lender = req.body.lender || "N/A";
-  const salesperson = req.body.salesperson || "N/A";
-  const processor = req.body.processor || "N/A";
+  if (userErr || !userRecord) {
+    return res.status(401).send("Invalid user");
+  }
 
-const file = Array.isArray(req.files.file) ? req.files.file[0] : req.files.file;
+  const plan = (userRecord.plan || "").toLowerCase();
+  const usage = userRecord.pages_used || 0;
 
-  try {
-    // 🗄️ Decrypt if needed
-    let pdfBytes = file.data;
-    try {
-      await PDFDocument.load(pdfBytes, { ignoreEncryption: false });
-    } catch {
-      const tempId = Date.now();
-      const inPath = path.join(__dirname, `temp-${tempId}.pdf`);
-      const outPath = path.join(__dirname, `temp-${tempId}-dec.pdf`);
-      fs.writeFileSync(inPath, file.data);
-      await new Promise((resolve, reject) => {
-        exec(`qpdf --decrypt "${inPath}" "${outPath}"`, (error) => {
-          if (error) reject(error);
-          else resolve();
-        });
-      });
-      pdfBytes = fs.readFileSync(outPath);
-      fs.unlinkSync(inPath);
-      fs.unlinkSync(outPath);
+  // 🧠 Decrypt if needed
+  fs.writeFileSync("input.pdf", file.data);
+  exec(`qpdf --decrypt input.pdf decrypted.pdf`, async (err) => {
+    const inputPath = err ? "input.pdf" : "decrypted.pdf";
+    const fileData = fs.readFileSync(inputPath);
+    const pdfDoc = await PDFDocument.load(fileData);
+    const logoExts = [".png", ".jpg", ".jpeg"];
+    let logoImage;
+
+    for (const ext of logoExts) {
+      const { data: imageData } = await supabase
+        .storage
+        .from("wholesale.logos")
+        .download(`${userEmail}${ext}`);
+      if (imageData) {
+        const imgBytes = await imageData.arrayBuffer();
+        try {
+          logoImage = ext === ".png" 
+            ? await pdfDoc.embedPng(imgBytes) 
+            : await pdfDoc.embedJpg(imgBytes);
+          break;
+        } catch {}
+      }
     }
 
-    const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+    if (!logoImage) {
+      return res.status(404).send("Logo not found for this user.");
+    }
 
-    // 📊 Usage
-   const numPages = pdfDoc.getPageCount();
+    // 📎 Generate QR Code
+    const qrData = `Lender: ${lender}\nSalesperson: ${salesperson}\nProcessor: ${processor}\nEmail: ${userEmail}`;
+    const qrImageBytes = await QRCode.toBuffer(qrData);
+    const qrImage = await pdfDoc.embedPng(qrImageBytes);
 
-// 🔁 Fetch user's current usage and plan
-const { data: userUsage, error: usageErr } = await supabase
-  .from(process.env.PARTNER_TABLE)
-  .select("pages_used, plan")
-  .eq("id", user_id)
-  .single();
+    const numPages = pdfDoc.getPageCount();
+    for (let i = 0; i < numPages; i++) {
+      const page = pdfDoc.getPage(i);
+      const { width, height } = page.getSize();
 
-if (usageErr || !userUsage) throw new Error("Usage record not found");
+      // Tile watermark
+      const cols = 3;
+      const rows = 4;
+      const scale = 0.2;
+      const logoDims = logoImage.scale(scale);
 
-const updatedPagesUsed = userUsage.pages_used + numPages;
-const plan = (userUsage.plan || "").toLowerCase();
-let limit = Infinity;
+      for (let col = 0; col < cols; col++) {
+        for (let row = 0; row < rows; row++) {
+          const x = (width / cols) * col + 10;
+          const y = (height / rows) * row + 10;
+          page.drawImage(logoImage, {
+            x,
+            y,
+            width: logoDims.width,
+            height: logoDims.height,
+            rotate: { type: "degrees", angle: 45 },
+            opacity: 0.2,
+          });
+        }
+      }
 
-if (plan === "core") limit = 25000;
-else if (plan === "pro") limit = 50000;
+      // QR bottom right
+      page.drawImage(qrImage, {
+        x: width - 70,
+        y: 20,
+        width: 50,
+        height: 50,
+      });
 
-// ❗ Log only, do not block access
-if (updatedPagesUsed > limit) {
-  console.warn(`⚠️ User ${user_id} exceeded usage limit for plan "${plan}"`);
-  // Optional: email, webhook, or flag if you want
-}
+      // Compliance header (top margin)
+      page.drawText("State-specific compliance may apply. Broker assumes all responsibility.", {
+        x: 30,
+        y: height - 30,
+        size: 8,
+        color: rgb(0.5, 0.5, 0.5),
+      });
+    }
 
-// 📈 Update pages_used in Supabase
-await supabase
-  .from(process.env.PARTNER_TABLE)
-  .update({ pages_used: updatedPagesUsed })
-  .eq("id", user_id);
+    // 🔁 Usage tracking
+    const updatedPagesUsed = usage + numPages;
 
+    await supabase
+      .from(process.env.PARTNER_TABLE)
+      .update({ pages_used: updatedPagesUsed })
+      .eq("user_email", userEmail);
 
-// 🖼️ Get logo from wholesale bucket (flat: user_email.png or .jpg)
-const possibleExtensions = [".png", ".jpg", ".jpeg"];
-let logoBytes = null;
+    if ((plan === "core" && updatedPagesUsed > 25000) || (plan === "pro" && updatedPagesUsed > 50000)) {
+      console.log(`Plan exceeded for ${userEmail} (${plan}) — ${updatedPagesUsed} pages used`);
+    }
 
-for (const ext of possibleExtensions) {
-  const logoPath = `${userEmail}${ext}`;
-  const { data: logoUrlData } = supabase.storage.from("wholesale.logos").getPublicUrl(logoPath);
-  const logoRes = await fetch(logoUrlData.publicUrl);
-  if (logoRes.ok) {
-    logoBytes = await logoRes.arrayBuffer();
-    break;
-  }
-}
-
-if (!logoBytes) {
-  throw new Error("No logo found in wholesale bucket for provided email.");
-}
-
-
-// 🔁 Create combined watermark page (logo + QR)
-const watermarkDoc = await PDFDocument.create();
-const watermarkImage = await watermarkDoc.embedPng(logoBytes);
-const { width, height } = pdfDoc.getPages()[0].getSize();
-const watermarkPage = watermarkDoc.addPage([width, height]);
-
-// 🔢 Logo tiling
-const logoWidth = width * 0.2;
-const logoHeight = (logoWidth / watermarkImage.width) * watermarkImage.height;
-
-for (let x = 0; x < width; x += (logoWidth + 150)) {
-  for (let y = 0; y < height; y += (logoHeight + 150)) {
-    watermarkPage.drawImage(watermarkImage, {
-      x,
-      y,
-      width: logoWidth,
-      height: logoHeight,
-      opacity: 0.15,
-      rotate: degrees(45),
-    });
-  }
-}
-
-// 🔐 QR Code generation
-const today = new Date().toISOString().split("T")[0];
-const payload = encodeURIComponent(`ProtectedByAquamark|${userEmail}|${lender}|${salesperson}|${processor}|${today}`);
-const qrText = `https://aquamark.io/q.html?data=${payload}`;
-const qrDataUrl = await QRCode.toDataURL(qrText, { margin: 0, scale: 5 });
-const qrImageBytes = Buffer.from(qrDataUrl.split(",")[1], "base64");
-const qrImage = await watermarkDoc.embedPng(qrImageBytes);
-
-// 🧷 Add QR to same watermark page (bottom-right)
-const qrSize = 20;
-watermarkPage.drawImage(qrImage, {
-  x: width - qrSize - 15,
-  y: 15,
-  width: qrSize,
-  height: qrSize,
-  opacity: 0.4,
-});
-
-// ✅ Save unified watermark page
-const watermarkPdfBytes = await watermarkDoc.save();
-const watermarkEmbed = await PDFDocument.load(watermarkPdfBytes);
-const [embeddedPage] = await pdfDoc.embedPages([watermarkEmbed.getPages()[0]]);
-
-    pdfDoc.getPages().forEach((page) => {
-  page.drawPage(embeddedPage, { x: 0, y: 0, width, height });
-});
-
-    const finalPdf = await pdfDoc.save();
-
-    // 📜 Optional: Add state disclaimer if applicable
-const stateInput = (req.body.state || "").toLowerCase().replace(/\s/g, "");
-const stateMap = {
-  ca: "Disclaimer: Disclosure and CFL license required.",
-  california: "Disclaimer: Disclosure and CFL license required.",
-  ct: "Disclaimer: Registration and compensation disclosure required for deals under $250K.",
-  connecticut: "Disclaimer: Registration and compensation disclosure required for deals under $250K.",
-  fl: "Disclaimer: Advertising must include address and phone number. Compensation must be disclosed.",
-  florida: "Disclaimer: Advertising must include address and phone number. Compensation must be disclosed.",
-  ga: "Disclaimer: Disclosure required.",
-  georgia: "Disclaimer: Disclosure required.",
-  mo: "Disclaimer: Registration and disclosure required.",
-  missouri: "Disclaimer: Registration and disclosure required.",
-  ny: "Disclaimer: Disclosure required.",
-  newyork: "Disclaimer: Disclosure required.",
-  ut: "Disclaimer: License, registration and disclosure required.",
-  utah: "Disclaimer: License, registration and disclosure required.",
-  va: "Disclaimer: Registration and disclosure required.",
-  virginia: "Disclaimer: Registration and disclosure required.",
-};
-
-const disclaimer = stateMap[stateInput];
-if (disclaimer) {
-  res.setHeader("X-State-Disclaimer", disclaimer);
-}
-    
+    const pdfBytes = await pdfDoc.save();
     res.setHeader("Content-Type", "application/pdf");
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename="${file.name.replace(".pdf", "")}-protected.pdf"`
-    );
-    res.send(Buffer.from(finalPdf));
-  } catch (err) {
-    console.error("❌ Watermark error:", err);
-    res.status(500).send("Failed to process watermark: " + err.message);
-  }
+    res.setHeader("Content-Disposition", "attachment; filename=watermarked.pdf");
+    res.send(Buffer.from(pdfBytes));
+
+    fs.unlinkSync("input.pdf");
+    if (fs.existsSync("decrypted.pdf")) fs.unlinkSync("decrypted.pdf");
+  });
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
+app.listen(port, () => {
+  console.log(`Aquamark Wholesale server running on port ${port}`);
 });
