@@ -56,21 +56,28 @@ app.post("/watermark", async (req, res) => {
     const pdfDoc = await PDFDocument.load(fileData, { ignoreEncryption: true });
     const pageSize = pdfDoc.getPage(0).getSize();
 
-// 🖼️ Get most recent logo from wholesale bucket
-const { data: logoList } = await supabase.storage.from("wholesale.logos").list(userEmail);
+// 🖼️ Optimized logo fetch from flat root
+const { data: logoList } = await supabase.storage.from("wholesale.logos").list("", { limit: 1000 });
 if (!logoList || logoList.length === 0) {
-  return res.status(404).send("Logo not found for this user");
+  return res.status(404).send("No logos found");
 }
 
-const latestLogo = logoList.sort((a, b) =>
-  parseInt(b.name.split("-")[1]) - parseInt(a.name.split("-")[1])
+const matchingLogos = logoList.filter((file) => file.name.startsWith(userEmail));
+if (matchingLogos.length === 0) {
+  return res.status(404).send("No logo found for this user");
+}
+
+// Sort by timestamp if present, otherwise just take first
+const latestLogo = matchingLogos.sort((a, b) =>
+  (b.name.match(/-(\d+)/)?.[1] ?? 0) - (a.name.match(/-(\d+)/)?.[1] ?? 0)
 )[0];
-const logoPath = `${userEmail}/${latestLogo.name}`;
-const { data: logoFile } = await supabase.storage.from("wholesale.logos").download(logoPath);
+
+const { data: logoFile } = await supabase.storage.from("wholesale.logos").download(latestLogo.name);
 if (!logoFile) {
   return res.status(404).send("Logo download failed");
 }
 const logoBytes = await logoFile.arrayBuffer();
+
 
 
     // 🖼️ Create watermark overlay
