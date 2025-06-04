@@ -1,142 +1,142 @@
 const express = require("express");
-const fileUpload = require("express-fileupload");
-const cors = require("cors");
-const { exec } = require("child_process");
-const fs = require("fs");
-const path = require("path");
-const { PDFDocument, rgb, degrees } = require("pdf-lib");
-const fetch = require("node-fetch");
+const multer = require("multer");
+const { PDFDocument, rgb } = require("pdf-lib");
 const { createClient } = require("@supabase/supabase-js");
 const QRCode = require("qrcode");
+const fs = require("fs");
+const sharp = require("sharp");
+const { execSync } = require("child_process");
 
 const app = express();
-const port = process.env.PORT;
+const upload = multer({ storage: multer.memoryStorage() });
+const port = 10000;
 
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
 
-app.use(cors());
-app.use(fileUpload());
+app.use(express.json());
 
-app.post("/watermark", async (req, res) => {
-  const apiKey = req.headers.authorization?.split(" ")[1];
-  const userEmail = req.body.user_email;
-  const salesperson = req.body.salesperson || "unknown";
-  const processor = req.body.processor || "unknown";
-  const lender = req.body.lender || "unknown";
+app.post("/watermark", upload.array("pdfs"), async (req, res) => {
+  try {
+    const { apiKey, userEmail, salesperson, processor, lender } = req.body;
 
-  if (apiKey !== process.env.AQUAMARK_API_KEY) {
-    return res.status(403).send("Unauthorized");
-  }
+    if (apiKey !== process.env.PARTNER_API_KEY) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
 
-  if (!req.files || !req.files.file || !userEmail) {
-    return res.status(400).send("Missing file or user_email");
-  }
+    // Lookup user
+    const { data: userRecord, error: usageError } = await supabase
+      .from("users_brokersync360")
+      .select("*")
+      .eq("user_email", userEmail)
+      .single();
 
-  const file = req.files.file;
+    if (!userRecord || usageError) {
+      return res.status(404).json({ error: "User not found" });
+    }
 
-  // 🔍 Fetch user from partner table
-  const { data: userRecord, error: userErr } = await supabase
-    .from(process.env.PARTNER_TABLE)
-    .select("*")
-    .eq("user_email", userEmail)
-    .single();
+    // Find logo (no timestamp, just userEmail.png|jpg|jpeg)
+    const { data: logoList } = await supabase.storage
+      .from("wholesale.logos")
+      .list("", { limit: 100 });
 
-  if (userErr || !userRecord) {
-    return res.status(401).send("Invalid user");
-  }
+    const match = logoList.find((f) =>
+      f.name.toLowerCase().startsWith(userEmail.toLowerCase())
+    );
 
-  const plan = (userRecord.plan || "").toLowerCase();
-  const usage = userRecord.pages_used || 0;
+    if (!match) {
+      return res.status(400).json({ error: "Logo not found" });
+    }
 
-  // 🧠 Decrypt if needed
-  fs.writeFileSync("input.pdf", file.data);
-  exec(`qpdf --decrypt input.pdf decrypted.pdf`, async (err) => {
-    const inputPath = err ? "input.pdf" : "decrypted.pdf";
-    const fileData = fs.readFileSync(inputPath);
-    const pdfDoc = await PDFDocument.load(fileData, { ignoreEncryption: true });
-    const pageSize = pdfDoc.getPage(0).getSize();
+    const { data: logoFile } = await supabase.storage
+      .from("wholesale.logos")
+      .download(match.name);
 
-    // 🖼️ Try .png, .jpg, and .jpeg for logo format
-    const possibleExtensions = [".png", ".jpg", ".jpeg"];
-    let logoBytes = null;
+    if (!logoFile) {
+      return res.status(400).json({ error: "Failed to fetch logo" });
+    }
 
-    for (const ext of possibleExtensions) {
-      const filePath = `${userEmail}${ext}`;
-      const { data: head } = await supabase.storage.from("wholesale.logos").download(filePath);
-      if (head) {
-        logoBytes = await head.arrayBuffer();
-        break;
+    const logoBuffer = Buffer.from(await logoFile.arrayBuffer());
+    const logoJpg = await sharp(logoBuffer).jpeg().toBuffer();
+
+    // Generate QR once per batch
+    const qrData = `Lender: ${lender}\nSalesperson: ${salesperson}\nProcessor: ${processor}\nDate: ${new Date().toLocaleString()}`;
+    const qrBase64 = await QRCode.toDataURL(qrData);
+    const qrBuffer = Buffer.from(qrBase64.split(",")[1], "base64");
+
+    const outputFiles = [];
+
+    for (const file of req.files) {
+      const inputPath = "input.pdf";
+      const outputPath = "decrypted.pdf";
+      fs.writeFileSync(inputPath, file.buffer);
+
+      try {
+        execSync(`qpdf --password="" --decrypt ${inputPath} ${outputPath}`);
+      } catch {
+        fs.unlinkSync(inputPath);
+        return res.status(400).json({ error: "Failed to decrypt PDF" });
       }
-    }
 
-    if (!logoBytes) {
-      return res.status(404).send("Logo not found for this user");
-    }
+      const decrypted = fs.readFileSync(outputPath);
+      fs.unlinkSync(inputPath);
+      fs.unlinkSync(outputPath);
 
-    // 🖼️ Create watermark overlay
-    const watermarkDoc = await PDFDocument.create();
-    const watermarkImage = await watermarkDoc.embedPng(logoBytes);
-    const watermarkPage = watermarkDoc.addPage([pageSize.width, pageSize.height]);
+      const pdfDoc = await PDFDocument.load(decrypted, {
+        ignoreEncryption: true,
+      });
 
-    const logoWidth = pageSize.width * 0.2;
-    const logoHeight = (logoWidth / watermarkImage.width) * watermarkImage.height;
+      const logoImage = await pdfDoc.embedJpg(logoJpg);
+      const qrImage = await pdfDoc.embedPng(qrBuffer);
 
-    for (let x = 0; x < pageSize.width; x += (logoWidth + 150)) {
-      for (let y = 0; y < pageSize.height; y += (logoHeight + 150)) {
-        watermarkPage.drawImage(watermarkImage, {
-          x,
-          y,
-          width: logoWidth,
-          height: logoHeight,
-          opacity: 0.15,
-          rotate: degrees(45),
+      const pages = pdfDoc.getPages();
+      for (const page of pages) {
+        const { width, height } = page.getSize();
+
+        // Tile watermark
+        const spacing = 250;
+        const logoDims = logoImage.scale(0.2);
+
+        for (let y = 0; y < height + spacing; y += spacing) {
+          for (let x = -width / 2; x < width + spacing; x += spacing) {
+            page.drawImage(logoImage, {
+              x,
+              y,
+              width: logoDims.width,
+              height: logoDims.height,
+              rotate: { type: "degrees", angle: 45 },
+              opacity: 0.2,
+            });
+          }
+        }
+
+        // QR code bottom right
+        const qrDims = qrImage.scale(0.5);
+        page.drawImage(qrImage, {
+          x: width - qrDims.width - 20,
+          y: 20,
+          width: qrDims.width,
+          height: qrDims.height,
         });
       }
+
+      const finalPdf = await pdfDoc.save();
+
+      outputFiles.push({
+        filename: file.originalname.replace(".pdf", " - protected.pdf"),
+        content: finalPdf.toString("base64"),
+      });
     }
 
-    // 🔐 QR Code
-    const today = new Date().toISOString().split("T")[0];
-    const payload = encodeURIComponent(`ProtectedByAquamark|${userEmail}|${lender}|${salesperson}|${processor}|${today}`);
-    const qrText = `https://aquamark.io/q.html?data=${payload}`;
-    const qrDataUrl = await QRCode.toDataURL(qrText, { margin: 0, scale: 5 });
-    const qrImageBytes = Buffer.from(qrDataUrl.split(",")[1], "base64");
-    const qrImage = await watermarkDoc.embedPng(qrImageBytes);
-
-    watermarkPage.drawImage(qrImage, {
-      x: pageSize.width - 35,
-      y: 15,
-      width: 20,
-      height: 20,
-      opacity: 0.4,
-    });
-
-    const watermarkPdfBytes = await watermarkDoc.save();
-    const watermarkEmbed = await PDFDocument.load(watermarkPdfBytes);
-    const [overlayPage] = await pdfDoc.embedPages([watermarkEmbed.getPages()[0]]);
-
-    pdfDoc.getPages().forEach((page) => {
-      page.drawPage(overlayPage, { x: 0, y: 0, width: pageSize.width, height: pageSize.height });
-    });
-
-    // 📈 Usage tracking
-    const numPages = pdfDoc.getPageCount();
-    const updatedPagesUsed = usage + numPages;
-
-    await supabase
-      .from(process.env.PARTNER_TABLE)
-      .update({ pages_used: updatedPagesUsed })
-      .eq("user_email", userEmail);
-
-    const finalPdf = await pdfDoc.save();
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", "attachment; filename=watermarked.pdf");
-    res.send(Buffer.from(finalPdf));
-
-    fs.unlinkSync("input.pdf");
-    if (fs.existsSync("decrypted.pdf")) fs.unlinkSync("decrypted.pdf");
-  });
+    res.json({ files: outputFiles });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
 });
 
 app.listen(port, () => {
-  console.log(`✅ Aquamark Wholesale running on port ${port}`);
+  console.log(`Aquamark Wholesale server running on port ${port}`);
 });
