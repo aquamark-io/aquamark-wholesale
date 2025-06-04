@@ -102,7 +102,7 @@ const file = Array.isArray(req.files.file) ? req.files.file[0] : req.files.file;
       return res.status(402).send("Not enough page credits.");
     }
 
-// 🖼️ Get logo from wholesale bucket (email.png or email.jpg)
+// 🖼️ Get logo from wholesale bucket (flat: user_email.png or .jpg)
 const possibleExtensions = [".png", ".jpg", ".jpeg"];
 let logoBytes = null;
 
@@ -119,6 +119,7 @@ for (const ext of possibleExtensions) {
 if (!logoBytes) {
   throw new Error("No logo found in wholesale bucket for provided email.");
 }
+
 
 // 🔁 Create combined watermark page (logo + QR)
 const watermarkDoc = await PDFDocument.create();
