@@ -102,17 +102,23 @@ const file = Array.isArray(req.files.file) ? req.files.file[0] : req.files.file;
       return res.status(402).send("Not enough page credits.");
     }
 
-    // 🖼️ Get logo from Supabase
-    const { data: logoList } = await supabase.storage.from("logos").list(userEmail);
-    if (!logoList || logoList.length === 0) throw new Error("No logo found");
+// 🖼️ Get logo from wholesale bucket (email.png or email.jpg)
+const possibleExtensions = [".png", ".jpg", ".jpeg"];
+let logoBytes = null;
 
-    const latestLogo = logoList.sort((a, b) =>
-      parseInt(b.name.split("-")[1]) - parseInt(a.name.split("-")[1])
-    )[0];
-    const logoPath = `${userEmail}/${latestLogo.name}`;
-    const { data: logoUrlData } = supabase.storage.from("logos").getPublicUrl(logoPath);
-    const logoRes = await fetch(logoUrlData.publicUrl);
-    const logoBytes = await logoRes.arrayBuffer();
+for (const ext of possibleExtensions) {
+  const logoPath = `${userEmail}${ext}`;
+  const { data: logoUrlData } = supabase.storage.from("wholesale.logos").getPublicUrl(logoPath);
+  const logoRes = await fetch(logoUrlData.publicUrl);
+  if (logoRes.ok) {
+    logoBytes = await logoRes.arrayBuffer();
+    break;
+  }
+}
+
+if (!logoBytes) {
+  throw new Error("No logo found in wholesale bucket for provided email.");
+}
 
 // 🔁 Create combined watermark page (logo + QR)
 const watermarkDoc = await PDFDocument.create();
