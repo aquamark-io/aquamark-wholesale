@@ -126,7 +126,10 @@ app.post("/watermark", async (req, res) => {
 
   const finalPdf = await pdfDoc.save();
   res.setHeader("Content-Type", "application/pdf");
-  res.setHeader("Content-Disposition", "attachment; filename=watermarked.pdf");
+res.setHeader(
+  "Content-Disposition",
+  `attachment; filename="${file.name.replace(".pdf", "")} - protected.pdf"`
+);
   res.send(Buffer.from(finalPdf));
 });
 
