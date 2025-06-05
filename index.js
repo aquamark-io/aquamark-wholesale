@@ -133,12 +133,40 @@ app.post("/watermark", async (req, res) => {
     .eq("user_email", userEmail);
 
   const finalPdf = await pdfDoc.save();
-  res.setHeader("Content-Type", "application/pdf");
-  res.setHeader(
-    "Content-Disposition",
-    `attachment; filename="${file.name.replace(".pdf", "")} - protected.pdf"`
-  );
-  res.send(Buffer.from(finalPdf));
+
+    // 📜 Optional: Add state disclaimer if applicable
+const stateInput = (req.body.state || "").toLowerCase().replace(/\s/g, "");
+const stateMap = {
+  ca: "Disclaimer: Disclosure and CFL license required.",
+  california: "Disclaimer: Disclosure and CFL license required.",
+  ct: "Disclaimer: Registration and compensation disclosure required for deals under $250K.",
+  connecticut: "Disclaimer: Registration and compensation disclosure required for deals under $250K.",
+  fl: "Disclaimer: Advertising must include address and phone number. Compensation must be disclosed.",
+  florida: "Disclaimer: Advertising must include address and phone number. Compensation must be disclosed.",
+  ga: "Disclaimer: Disclosure required.",
+  georgia: "Disclaimer: Disclosure required.",
+  mo: "Disclaimer: Registration and disclosure required.",
+  missouri: "Disclaimer: Registration and disclosure required.",
+  ny: "Disclaimer: Disclosure required.",
+  newyork: "Disclaimer: Disclosure required.",
+  ut: "Disclaimer: License, registration and disclosure required.",
+  utah: "Disclaimer: License, registration and disclosure required.",
+  va: "Disclaimer: Registration and disclosure required.",
+  virginia: "Disclaimer: Registration and disclosure required.",
+};
+
+const disclaimer = stateMap[stateInput];
+if (disclaimer) {
+  res.setHeader("X-State-Disclaimer", disclaimer);
+}
+
+res.setHeader("Content-Type", "application/pdf");
+res.setHeader(
+  "Content-Disposition",
+  `attachment; filename="${file.name.replace(".pdf", "")} - protected.pdf"`
+);
+res.send(Buffer.from(finalPdf));
+
 });
 
 app.listen(port, () => {
