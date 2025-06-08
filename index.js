@@ -157,10 +157,9 @@ const stateMap = {
   virginia: "Registration required",
 };
 
-const disclaimer = stateMap[stateInput];
-if (disclaimer) {
-  res.setHeader("X-State-Disclaimer", disclaimer);
-}
+let disclaimer = stateMap[stateInput] || "No current requirements";
+res.setHeader("X-State-Disclaimer", disclaimer);
+
 
 res.setHeader("Content-Type", "application/pdf");
 res.setHeader(
