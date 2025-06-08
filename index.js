@@ -131,6 +131,7 @@ app.post("/watermark", async (req, res) => {
     .from(process.env.PARTNER_TABLE)
     .update({ pages_used: updatedPagesUsed })
     files: (userRecord.files || 0) + 1
+    })
     .eq("user_email", userEmail);
 
   const finalPdf = await pdfDoc.save();
